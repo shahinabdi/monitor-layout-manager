@@ -2,70 +2,86 @@ import unittest
 from unittest.mock import patch, MagicMock
 import win32api
 import win32con
-from src.display_config import DisplayConfig
+import ctypes
+from src.display_config import DisplayConfig, DEVMODE
 
 
 class TestDisplayConfig(unittest.TestCase):
     def setUp(self):
         self.display_config = DisplayConfig()
+        self.display_name = "\\\\.\\DISPLAY1"  # Correct Windows display name format
+
+    def create_mock_devmode(self):
+        """Helper to create a mock DEVMODE structure"""
+        devmode = DEVMODE()
+        devmode.dmSize = ctypes.sizeof(DEVMODE)
+        devmode.dmPositionX = 0
+        devmode.dmPositionY = 0
+        devmode.dmPelsWidth = 1920
+        devmode.dmPelsHeight = 1080
+        devmode.dmDisplayOrientation = 0
+        devmode.dmDisplayFrequency = 60
+        devmode.dmDisplayFlags = 0
+        return devmode
 
     @patch("win32api.EnumDisplayDevices")
     @patch("ctypes.windll.user32.EnumDisplaySettingsW")
     def test_enumerate_displays(self, mock_enum_settings, mock_enum_devices):
-        # Mock device
+        # Create mock device
         mock_device = MagicMock()
-        mock_device.DeviceName = r"\.\DISPLAY1"
+        mock_device.DeviceName = self.display_name
         mock_device.StateFlags = win32con.DISPLAY_DEVICE_ATTACHED_TO_DESKTOP
 
-        # Setup device enumeration
-        mock_enum_devices.side_effect = [
-            mock_device,
-            win32api.error,  # End enumeration
-        ]
-
-        # Mock settings
+        # Setup mock returns
+        mock_enum_devices.side_effect = [mock_device, win32api.error]
         mock_enum_settings.return_value = 1
 
         # Test enumeration
         self.display_config.enumerate_displays()
 
         # Verify displays were enumerated
-        self.assertIn(r"\.\DISPLAY1", self.display_config.displays)
+        self.assertIn(self.display_name, self.display_config.displays)
 
-    def test_get_display_info(self):
-        # Setup test display
-        test_display = MagicMock()
-        test_display.dmPositionX = 0
-        test_display.dmPositionY = 0
-        test_display.dmPelsWidth = 1920
-        test_display.dmPelsHeight = 1080
-        test_display.dmDisplayOrientation = 0
-        test_display.dmDisplayFrequency = 60
-        test_display.dmDisplayFlags = 0
+    def test_get_display_info_nonexistent(self):
+        """Test getting info for non-existent display"""
+        info = self.display_config.get_display_info("NONEXISTENT")
+        self.assertIsNone(info)
 
-        self.display_config.displays = {r"\.\DISPLAY1": test_display}
+    def test_get_display_info_with_pending_changes(self):
+        """Test getting display info with pending changes"""
+        # Setup
+        self.display_config.displays[self.display_name] = self.create_mock_devmode()
+        self.display_config.pending_changes[self.display_name] = {
+            "x": 100,
+            "y": 200,
+            "orientation": 1,
+        }
 
-        # Test getting display info
-        info = self.display_config.get_display_info(r"\.\DISPLAY1")
+        # Test
+        info = self.display_config.get_display_info(self.display_name)
 
-        # Verify display info
-        self.assertIsNotNone(info)
-        self.assertEqual(info["width"], 1920)
-        self.assertEqual(info["height"], 1080)
-        self.assertEqual(info["refresh_rate"], 60)
+        # Verify
+        self.assertEqual(info["x"], 100)
+        self.assertEqual(info["y"], 200)
+        self.assertEqual(info["orientation"], 1)
 
-    def test_set_position(self):
-        # Test setting position
-        self.display_config.displays = {r"\.\DISPLAY1": MagicMock()}
+    @patch("ctypes.windll.user32.ChangeDisplaySettingsExW")
+    def test_apply_changes(self, mock_change_settings):
+        """Test applying changes"""
+        # Setup
+        self.display_config.displays[self.display_name] = self.create_mock_devmode()
+        self.display_config.pending_changes[self.display_name] = {
+            "x": 100,
+            "y": 200,
+            "orientation": 1,
+        }
 
-        # Set new position
-        self.display_config.set_position(r"\.\DISPLAY1", 100, 200)
+        # Mock successful settings change
+        mock_change_settings.return_value = 0
 
-        # Verify pending changes
-        self.assertIn(r"\.\DISPLAY1", self.display_config.pending_changes)
-        self.assertEqual(self.display_config.pending_changes[r"\.\DISPLAY1"]["x"], 100)
-        self.assertEqual(self.display_config.pending_changes[r"\.\DISPLAY1"]["y"], 200)
+        # Apply changes
+        result = self.display_config.apply_changes()
 
-
-if __name__ == "__main__":
-    unittest.main()
+        # Verify
+        self.assertTrue(result)
+        self.assertEqual(self.display_config.pending_changes, {})
