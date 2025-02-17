@@ -1,0 +1,48 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov
+    
+    - name: Run tests
+      run: |
+        python -m pytest tests/ --cov=src/ --cov-report=xml --cov-report=term
+    
+    # Only upload coverage if we have a token
+    - name: Upload coverage reports
+      if: github.repository == 'shahinabdi/monitor-layout-manager' && github.token != ''
+      uses: codecov/codecov-action@v5
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false  # Don't fail if coverage upload fails
+    
+    # Add test summary
+    - name: Test Summary
+      run: |
+        echo "### Test Results 🧪" >> $GITHUB_STEP_SUMMARY
+        echo "✅ All tests completed successfully" >> $GITHUB_STEP_SUMMARY
+      shell: bash
